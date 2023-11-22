@@ -5,9 +5,16 @@ import shutil
 from main import EasyPororoOcr
 import time
 import requests
+import subprocess
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'C:/uploads'
+
+# 현재 스크립트의 경로
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# exe파일 경로 받아오기
+exe_path = os.path.join(current_dir, "realesrgan-ncnn-vulkan.exe")
 
 @app.route('/ocr', methods=['POST'])
 def ocr_api():
@@ -15,11 +22,24 @@ def ocr_api():
     if 'yes' not in request.form or request.form['yes'] != '1':
         return jsonify({'error': 'Invalid request'}), 400
 
+    files = os.listdir(app.config['UPLOAD_FOLDER'])
+    # 파일이 없다면 에러 메시지를 반환합니다.
+    if not files:
+        return jsonify({'error': 'No images in the upload folder'}), 400
+
     # 'C:/uploads' 디렉토리 내의 모든 파일들을 순회합니다.
-    for filename in os.listdir(app.config['UPLOAD_FOLDER']):
+    for filename in files:
         # 파일이 .jpg 또는 .png 확장자를 가진다면
         if filename.endswith(".jpg") or filename.endswith(".png"):
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+            # 입력 파일명, 출력 파일명, 및 스케일 값을 지정합니다.
+            input_file = file_path
+            output_file = file_path
+            scale = "4"  # 얼마나 올릴건지 2~4까지
+
+            # subprocess.run 함수를 이용하여 응용 프로그램을 실행하고, 파라미터를 전달합니다.
+            subprocess.run([exe_path, "-i", input_file, "-s", scale, "-o", output_file])
 
             # yolov5 명령을 시스템에 실행시킵니다.
             os.system(
@@ -50,6 +70,9 @@ def ocr_api():
                     ocr = EasyPororoOcr()
                     text = ocr.run_ocr(cropped_file, debug=True)
 
+                    if not text:  # OCR로 글자를 추출하지 못한 경우
+                        return jsonify({'error': 'Failed to extract text with OCR'}), 400
+
                     # OCR 결과가 7자리를 넘지 않거나 9자리 이상이면 오류를 반환
                     if len(text) < 7 or len(text) > 9:
                         return jsonify({'error': 'Invalid OCR result'}), 400
@@ -62,12 +85,9 @@ def ocr_api():
                     data = {
                         'time': current_time,
                         'plate': results,
+                        'imgpath': file_path,
                     }
-                    with open(file_path, 'rb') as f:
-                        files = {
-                            'img': f,
-                        }
-                        response = requests.post(api_url, data=data, files=files)
+                    response = requests.post(api_url, data=data)
 
                     # 요청에 대한 응답을 확인합니다.
                     if response.status_code == 200:
@@ -75,12 +95,15 @@ def ocr_api():
                     else:
                         print(f'POST 요청에 실패했습니다. HTTP 상태 코드: {response.status_code}')
 
-            # 작업이 끝난 파일과 디렉토리를 삭제합니다.
-            os.remove(file_path)
-            shutil.rmtree('./output/result')
+            else:
+                # 작업이 끝난 파일과 디렉토리를 삭제합니다.
+                os.remove(file_path)
+                shutil.rmtree('./output/result')
+                return jsonify({'error': 'No labels found'}), 400  # 라벨을 찾지 못한 경우
 
     # 결과를 반환합니다.
     return jsonify({'results': results})
+
 
 if __name__ == '__main__':
     app.run(port=8081, debug=True)
